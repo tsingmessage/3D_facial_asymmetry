@@ -1,7 +1,11 @@
 
-Official implementation of the proposed pipeline for 3D facial asymmetry measurement mentioned in the publication: Automated three-dimensional analysis of facial asymmetry in patients with syndromic coronal synostosis: A retrospective study
+Official implementation of the proposed pipeline for 3D facial asymmetry measurement mentioned in the publication: \\
+Automated three-dimensional analysis of facial asymmetry in patients with syndromic coronal synostosis: A retrospective study
 
 Link to paper: https://doi.org/10.1016/j.jcms.2023.11.006
+
+
+![My result plot](fig5_1.jpg)
 
 ## Install
 --Install Python 3.6+, and create a virtual environment
