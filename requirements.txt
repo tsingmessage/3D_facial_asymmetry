@@ -1,0 +1,12 @@
+mayavi
+pandas
+numpy
+pyvista
+opencv-python
+menpo
+menpo3d
+open3d
+glob2 
+tqdm
+
+
