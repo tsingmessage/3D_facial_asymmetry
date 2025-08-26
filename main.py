@@ -1,4 +1,3 @@
-from fit_shaperror import fit_shaperror 
 import mayavi
 from plot_mlabfaceerror import plot_mlabfaceerror, read_ply
 from menpo.shape import TriMesh
@@ -7,75 +6,125 @@ import glob
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
+import pyvista as pv
+import open3d as o3d
+import os
+from icp import *
+from menpo3d.vtkutils import VTKClosestPointLocator
 
-#120529112309 120625091023 120621112333 ---------------------161209111758---200911110000-140627105925
-
-#120504102419 
-#120508131642 
-#120509113006
-#140627105925
-#140919103136
-#160715121428
-#path1='/media/lau/My Passport/data/facial_asymmetry/dense_FA_aligned/'
-#path2='/media/lau/My Passport/data/facial_asymmetry/dense_FA_aligned_mirror_aligned/'
 path_out = 'result_out/'
-path2 = 'dense_derma_aligned/'
-path1= 'dense_derma_aligned_mirror_aligned/'
 
+path_input = 'path_to_the_input_ply_mesh/'
+
+
+def mirror_mesh(mesh):
+    mirrored = mesh.copy()
+    print(mirrored.points[0,:])
+    mirrored.points[:,0] = -mirrored.points[:,0] +100
+    print(mirrored.points[0,:])
+    return mirrored
+
+
+
+
+
+def calculate_sum(points1, points2, half_face='left'):
+
+    assert half_face in ['left', 'right'], "half_face must be either 'left' or 'right'"
+    if half_face == 'left':
+        mask = points1[:, 0] < 0
+    else:
+        mask = points1[:, 0] > 0
+
+    points1 = points1[mask]
+    points2 = points2[mask]
+
+
+    distances = np.linalg.norm(points1 - points2, axis=1)  # Euclidean distances
+    n = distances.shape[0]  # number of points
+    return np.sum(distances) / n
+
+
+
+ply_file_list = glob.glob(path_input + '*.ply')
+imageid_list, score_list,score_list_up,score_list_mid,score_list_low,score_list_up_mid = [], [],[],[],[],[]
+
+count_all = 0
 
 df_index = pd.read_csv('facial_segment_index/segment_index.csv')
 print(df_index.head())
 index_up  = np.array(df_index['up'].values)[0:976].astype(int)-1
 index_mid  = np.array(df_index['mid'].values)[0:2042].astype(int)-1
 index_low  = np.array(df_index['low'].values)[0:2005].astype(int)-1
-#print(index_up)
+index_up_mid = np.concatenate((index_up, index_mid))
 
-ply_file_list = glob.glob(path2 + '*.ply')
-imageid_list, score_list,score_list_up,score_list_mid,score_list_low = [], [],[],[],[]
-dist_error_sum = np.zeros([5023])
-count_all = 0
 for i_total, data_file in tqdm(enumerate(ply_file_list)):
 
-    #data_file = path1+'160715121428.ply'
-    print(data_file)
-    face_shp1,face_col1,face_tri1=read_ply(data_file)
-    #print(face_shp1)
-    face_shp2,face_col2,face_tri2=read_ply(data_file.replace(path2,path1))
-    #print(face_shp2)
-    file_out = data_file.replace(path2,'').replace('.ply','')
+    file_out = data_file.replace(path_input,'').replace('.ply','')
+    imageid_list = np.append(imageid_list, str(file_out))
 
 
-    imageid_list = np.append(imageid_list, str(file_out).zfill(12))
+    mesh = pv.read(data_file)
 
+    # Mirror the mesh
+    mirrored_mesh = mirror_mesh(mesh)  ## 
+    ###
 
-    file_out = path_out + file_out
-    #plot_2mlabvertex(face_shp1,face_col1,face_tri1,face_shp2,face_col2,face_tri2)
+    # Convert PyVista mesh to Open3D mesh
+    source_o3d = o3d.geometry.TriangleMesh()
+    source_o3d.vertices = o3d.utility.Vector3dVector(mesh.points)
+    source_o3d.triangles = o3d.utility.Vector3iVector(mesh.faces.reshape(-1, 4)[:, 1:])
 
+    mirrored_o3d = o3d.geometry.TriangleMesh()
+    mirrored_o3d.vertices = o3d.utility.Vector3dVector(mirrored_mesh.points)
+    mirrored_o3d.triangles = o3d.utility.Vector3iVector(mirrored_mesh.faces.reshape(-1, 4)[:, 1:])
 
-    target=TriMesh(face_shp2,face_tri2)
-    source=TriMesh(face_shp1,face_tri1)    
-    directional_hetmap_color, dist_error,N_vertices,tri_indices ,mean_err =fit_shaperror(source,target,flag_Near_vertices=True)
-    #print(dist_error.shape, np.mean(dist_error[index_up]), np.mean(dist_error[index_mid]),np.mean(dist_error[index_low]),mean_err)
+    # Perform ICP
+
+    P = np.rollaxis(mirrored_mesh.points,1)
+    X = np.rollaxis(mesh.points,1)
+    print(P.shape, X.shape)
     #exit(0)
-    dist_error_sum = dist_error_sum + dist_error
+    Rr, tr, num_iter = IterativeClosestPoint(source_pts = P, target_pts = X, tau = 10e-6)
+    # Apply transformation to mirrored mesh
+    #mirrored_o3d.transform(transform)
+
+    # transformed new points
+    Np = ApplyTransformation(P, Rr, tr)
+    Np = np.rollaxis(Np,1)
+    print(Np.shape)
+    #exit(0)
+    # Convert the transformed Open3D mesh back to a PyVista mesh
+    #vertices = mirrored_mesh.points
+    vertices = np.asarray(Np)
+    print(vertices)
+    #exit(0)
+    faces = np.asarray(mirrored_o3d.triangles)
+    faces = np.c_[np.full(len(faces), 3), faces]  # Adding a column for the number of vertices per face
+    mirrored_mesh = pv.PolyData(vertices, faces)
+
+    # Compute the difference between the original and mirrored mesh
+    closest_points_locator = VTKClosestPointLocator(mirrored_mesh)
+    closest_points, closest_idx = closest_points_locator(mesh.points)
+
+    # Calculate the sum
+    mfa_all = calculate_sum(mesh.points, closest_points)
+    mfa_up = calculate_sum(mesh.points[index_up], closest_points[index_up])
+    mfa_mid = calculate_sum(mesh.points[index_mid], closest_points[index_mid])
+    mfa_up_mid = calculate_sum(mesh.points[index_up_mid], closest_points[index_up_mid])
+    print("Asymmetry Value: ", mfa_all)
+    #exit(0)
     count_all = count_all + 1
     #if count_all > 160:
     #    break
 
-
-    score_list = np.append(score_list, mean_err)
-    score_list_up = np.append(score_list_up, np.mean(dist_error[index_up]))
-    score_list_mid = np.append(score_list_mid, np.mean(dist_error[index_mid]))
-    score_list_low = np.append(score_list_low, np.mean(dist_error[index_low]))
-    file_out = file_out + '_' + str(mean_err) + '.png'
-    plot_mlabfaceerror(face_shp2,dist_error,face_tri2,colormap='autumn',colormap_range=[0,5],\
-                       out_file = file_out, data_file=data_file, color_r=directional_hetmap_color)
-    #exit(0)
+    score_list = np.append(score_list, mfa_all)
+    score_list_up = np.append(score_list_up, mfa_up)
+    score_list_mid = np.append(score_list_mid, mfa_mid)
+    score_list_up_mid = np.append(score_list_up_mid, mfa_up_mid)
 
 
-print(count_all)
-print(dist_error_sum/count_all)
-#shape_tmp,col_tmp,face_tmp=read_ply(path_template)
+
 #plot_mlabfaceerror(shape_tmp,dist_error_sum/count_all,face_tmp,colormap='autumn', colormap_range=[0,10],out_file = 'avg_cases.png')
-data_df = pd.DataFrame({ 'imageID': imageid_list,  'score_all':score_list,'score_upper_face':score_list_up,'score_middle_face':score_list_mid,'score_lower_face':score_list_low})
-data_df.to_csv(path_out+'summary.csv',index=None)
+data_df = pd.DataFrame({ 'imageID': imageid_list,  'MFA_all':score_list,'MFA_upper_face':score_list_up,'MFA_middle_face':score_list_mid, 'MFA_upper_middle':score_list_up_mid})
+data_df.to_csv(path_out+'summary_rgF_C_final_tareq_pipeline.csv',index=None)
